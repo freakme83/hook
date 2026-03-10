@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Basket Shooter Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(circle, #1a202c 0%, #000000 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+            max-width: 100%;
+            max-height: 100%;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            pointer-events: none;
+            display: flex;
+            justify-content: space-around;
+            color: white;
+            z-index: 10;
+        }
+        .stat-card {
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 20px;
+            border-radius: 15px;
+            border: 2px solid #ed8936;
+            text-align: center;
+        }
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            color: white;
+        }
+        .btn {
+            background: #ed8936;
+            color: white;
+            padding: 15px 40px;
+            border-radius: 30px;
+            font-weight: bold;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+            pointer-events: auto;
+            border: none;
+            margin-top: 20px;
+        }
+        .btn:hover {
+            transform: scale(1.1);
+            background: #f6ad55;
+        }
+        .power-up-active {
+            color: #f56565;
+            text-shadow: 0 0 10px #f56565;
+            animation: pulse 0.5s infinite alternate;
+        }
+        @keyframes pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.1); }
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="ui-layer">
+        <div class="stat-card">
+            <div class="text-xs uppercase">Süre</div>
+            <div id="timer-display" class="text-2xl font-bold text-orange-400">60</div>
+        </div>
+        <div class="stat-card">
+            <div class="text-xs uppercase">Skor</div>
+            <div id="score-display" class="text-2xl font-bold">0</div>
+        </div>
+        <div id="streak-container" class="stat-card">
+            <div class="text-xs uppercase">Kombo</div>
+            <div id="streak-display" class="text-2xl font-bold text-yellow-400">0</div>
+        </div>
+    </div>
+
+    <div id="overlay">
+        <h1 class="text-5xl font-black mb-4 text-orange-500 text-center">BASKET SHOOTER PRO</h1>
+        <p class="text-lg mb-6 text-center px-10">Topu sürükle ve fırlat!<br>Fizik kolaylaştırıldı: Az çekişle çok mesafe.</p>
+        <button id="start-btn" class="btn">OYUNA BAŞLA</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('start-btn');
+    const overlay = document.getElementById('overlay');
+    const timerDisplay = document.getElementById('timer-display');
+    const scoreDisplay = document.getElementById('score-display');
+    const streakDisplay = document.getElementById('streak-display');
+
+    // Oyun Değişkenleri
+    let score = 0;
+    let timeLeft = 60;
+    let gameActive = false;
+    let streak = 0;
+    let isPowerShot = false;
+    let particles = [];
+    
+    // Eksik olan mouse değişkeni tanımlandı
+    let mouse = { x: 0, y: 0 };
+
+    // Fizik Parametreleri
+    const gravity = 0.28; 
+    const friction = 0.99; 
+    const powerMultiplier = 0.25; 
+    
+    let ball = {
+        x: 0, y: 0, radius: 25, 
+        vx: 0, vy: 0, 
+        isFlying: false, 
+        isGrabbed: false,
+        startX: 0, startY: 0
+    };
+
+    const hoop = {
+        x: 0, y: 0, width: 90, height: 10,
+        rimRadius: 6
+    };
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        resetBall();
+        hoop.x = canvas.width - 160;
+        hoop.y = canvas.height * 0.35;
+    }
+
+    function resetBall() {
+        ball.x = canvas.width * 0.2;
+        ball.y = canvas.height - 120;
+        ball.vx = 0;
+        ball.vy = 0;
+        ball.isFlying = false;
+        ball.isGrabbed = false;
+    }
+
+    function getMousePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+        const clientY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+        return {
+            x: clientX - rect.left,
+            y: clientY - rect.top
+        };
+    }
+
+    const handleStart = (e) => {
+        if (!gameActive) return;
+        const pos = getMousePos(e);
+        const dist = Math.hypot(pos.x - ball.x, pos.y - ball.y);
+        if (dist < ball.radius * 3) {
+            ball.isGrabbed = true;
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+        }
+    };
+
+    const handleMove = (e) => {
+        if (ball.isGrabbed) {
+            const pos = getMousePos(e);
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+        }
+    };
+
+    const handleEnd = (e) => {
+        if (ball.isGrabbed) {
+            ball.isGrabbed = false;
+            ball.startX = ball.x; 
+            const dx = ball.x - mouse.x;
+            const dy = ball.y - mouse.y;
+            
+            ball.vx = dx * powerMultiplier;
+            ball.vy = dy * powerMultiplier;
+            ball.isFlying = true;
+        }
+    };
+
+    canvas.addEventListener('mousedown', handleStart);
+    canvas.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    canvas.addEventListener('touchstart', handleStart, {passive: false});
+    canvas.addEventListener('touchmove', handleMove, {passive: false});
+    window.addEventListener('touchend', handleEnd);
+
+    function createParticles(x, y, color) {
+        for (let i = 0; i < 20; i++) {
+            particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * 12,
+                vy: (Math.random() - 0.5) * 12,
+                life: 1.0,
+                color: color
+            });
+        }
+    }
+
+    function update() {
+        if (!gameActive) return;
+
+        if (ball.isFlying) {
+            ball.vy += gravity;
+            ball.vx *= friction;
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            if (ball.x + ball.radius > canvas.width) {
+                ball.x = canvas.width - ball.radius;
+                ball.vx *= -0.6;
+            } else if (ball.x - ball.radius < 0) {
+                ball.x = ball.radius;
+                ball.vx *= -0.6;
+            }
+
+            if (ball.vy > 0 && 
+                ball.y > hoop.y - 15 && ball.y < hoop.y + 15 &&
+                ball.x > hoop.x - hoop.width/2 && ball.x < hoop.x + hoop.width/2) {
+                
+                scoreBasket();
+                resetBall();
+            }
+
+            if (ball.y - ball.radius > canvas.height || ball.x > canvas.width + 100) {
+                streak = 0;
+                isPowerShot = false;
+                streakDisplay.innerText = streak;
+                resetBall();
+            }
+        }
+
+        particles.forEach((p, i) => {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.025;
+            if (p.life <= 0) particles.splice(i, 1);
+        });
+    }
+
+    function scoreBasket() {
+        let points = 2;
+        if (ball.startX < canvas.width * 0.35) points = 3;
+
+        if (isPowerShot) {
+            points = 10;
+            createParticles(hoop.x, hoop.y, '#ff4500');
+            isPowerShot = false;
+            streak = 0;
+        } else {
+            streak++;
+            createParticles(hoop.x, hoop.y, '#fbbf24');
+        }
+
+        if (streak >= 3) isPowerShot = true;
+
+        score += points;
+        scoreDisplay.innerText = score;
+        streakDisplay.innerText = streak;
+        
+        if (isPowerShot) streakDisplay.classList.add('power-up-active');
+        else streakDisplay.classList.remove('power-up-active');
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(0, canvas.height, canvas.width * 0.35, 0, -Math.PI/2, true);
+        ctx.stroke();
+
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(hoop.x + hoop.width/2 + 5, hoop.y - 80, 10, 100);
+        
+        ctx.strokeStyle = '#e53e3e';
+        ctx.lineWidth = 8;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(hoop.x - hoop.width/2, hoop.y);
+        ctx.lineTo(hoop.x + hoop.width/2, hoop.y);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for(let i=-3; i<=3; i++) {
+            ctx.moveTo(hoop.x + i*12, hoop.y);
+            ctx.lineTo(hoop.x + i*7, hoop.y + 45);
+        }
+        ctx.stroke();
+
+        particles.forEach(p => {
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 4, 0, Math.PI*2);
+            ctx.fill();
+        });
+        ctx.globalAlpha = 1.0;
+
+        ctx.save();
+        ctx.translate(ball.x, ball.y);
+        
+        if (isPowerShot) {
+            ctx.shadowBlur = 30;
+            ctx.shadowColor = '#f56565';
+            for(let i=0; i<3; i++){
+                ctx.fillStyle = '#f6ad55';
+                ctx.beginPath();
+                ctx.arc((Math.random()-0.5)*30, (Math.random()-0.5)*30, 12, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+
+        const grad = ctx.createRadialGradient(-7, -7, 2, 0, 0, ball.radius);
+        grad.addColorStop(0, '#fbd38d');
+        grad.addColorStop(1, '#c05621');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, ball.radius, 0, Math.PI*2);
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, ball.radius, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.restore();
+
+        if (ball.isGrabbed) {
+            ctx.setLineDash([8, 4]);
+            ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(ball.x, ball.y);
+            const targetX = ball.x + (ball.x - mouse.x) * 2;
+            const targetY = ball.y + (ball.y - mouse.y) * 2;
+            ctx.lineTo(targetX, targetY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        requestAnimationFrame(() => {
+            update();
+            draw();
+        });
+    }
+
+    function startGame() {
+        score = 0;
+        timeLeft = 60;
+        streak = 0;
+        isPowerShot = false;
+        gameActive = true;
+        scoreDisplay.innerText = "0";
+        streakDisplay.innerText = "0";
+        overlay.style.display = 'none';
+        
+        const timerInterval = setInterval(() => {
+            if (!gameActive) {
+                clearInterval(timerInterval);
+                return;
+            }
+            timeLeft--;
+            timerDisplay.innerText = timeLeft;
+            if (timeLeft <= 0) {
+                clearInterval(timerInterval);
+                endGame();
+            }
+        }, 1000);
+    }
+
+    function endGame() {
+        gameActive = false;
+        overlay.style.display = 'flex';
+        overlay.innerHTML = `
+            <h1 class="text-5xl font-black mb-2 text-orange-500">SÜRE DOLDU!</h1>
+            <div class="text-3xl mb-6">Toplam Skor: <span class="text-yellow-400 font-bold">${score}</span></div>
+            <button onclick="location.reload()" class="btn">YENİDEN DENE</button>
+        `;
+    }
+
+    startBtn.addEventListener('click', startGame);
+    window.addEventListener('resize', resize);
+    
+    resize();
+    draw();
+
+</script>
+</body>
+</html>
