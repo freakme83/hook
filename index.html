@@ -246,6 +246,10 @@
         }
     }
 
+    function induceNetWave(force) {
+        netWaveVelocity += Math.max(-2.2, Math.min(2.2, force));
+    }
+
     function collideWithPoint(px, py) {
         const dx = ball.x - px;
         const dy = ball.y - py;
@@ -264,6 +268,7 @@
                 ball.vy -= (1 + bounceDamping) * normalVel * ny;
                 ball.vx *= 0.98;
                 ball.vy *= 0.98;
+                induceNetWave(Math.abs(normalVel) * 0.06);
             }
         }
     }
@@ -288,25 +293,34 @@
             if (ball.prevX + ball.radius <= boardX) {
                 ball.x = boardX - ball.radius;
                 ball.vx = -Math.abs(ball.vx) * 0.78;
+                induceNetWave(Math.abs(ball.vx) * 0.03);
             } else if (ball.prevY <= boardY && ball.vy > 0) {
                 ball.y = boardY - ball.radius;
                 ball.vy *= -0.66;
+                induceNetWave(Math.abs(ball.vy) * 0.025);
             } else {
                 ball.x = boardX + hoop.boardWidth + ball.radius;
                 ball.vx = Math.abs(ball.vx) * 0.6;
+                induceNetWave(Math.abs(ball.vx) * 0.02);
             }
         }
 
-        if (
-            !ball.scoredThisShot &&
-            ball.prevY < rimY - ball.radius * 0.45 &&
-            ball.y >= rimY + ball.radius * 0.15 &&
-            ball.x > rimLeft + ball.radius * 0.45 &&
-            ball.x < rimRight - ball.radius * 0.45
-        ) {
-            ball.scoredThisShot = true;
-            netWaveVelocity += Math.min(7, Math.abs(ball.vy) * 0.25 + 1.2);
-            scoreBasket();
+        const innerLeft = rimLeft + hoop.rimRadius * 0.9;
+        const innerRight = rimRight - hoop.rimRadius * 0.9;
+        const prevToCurrentY = ball.y - ball.prevY;
+
+        if (!ball.scoredThisShot && prevToCurrentY > 0) {
+            const crossedRimPlane = ball.prevY <= rimY && ball.y >= rimY;
+            const crossedCenterPlane = ball.prevY <= rimY + ball.radius * 0.2 && ball.y >= rimY + ball.radius * 0.2;
+            if (crossedRimPlane || crossedCenterPlane) {
+                const t = (rimY - ball.prevY) / (prevToCurrentY || 1);
+                const lerpedX = ball.prevX + (ball.x - ball.prevX) * Math.max(0, Math.min(1, t));
+                if (lerpedX > innerLeft && lerpedX < innerRight) {
+                    ball.scoredThisShot = true;
+                    induceNetWave(Math.min(3, Math.abs(ball.vy) * 0.2 + Math.abs(ball.vx) * 0.08 + 0.6));
+                    scoreBasket();
+                }
+            }
         }
     }
 
@@ -345,8 +359,12 @@
             }
         }
 
-        netWaveVelocity += (0 - netWave) * 0.02 * deltaMultiplier;
-        netWaveVelocity *= Math.pow(0.9, deltaMultiplier);
+        if (ball.isFlying && ball.x > getRimLeft() - 20 && ball.x < getRimRight() + 20 && ball.y > hoop.y - 10 && ball.y < hoop.y + 72) {
+            induceNetWave(ball.vx * 0.004 * deltaMultiplier);
+        }
+
+        netWaveVelocity += (0 - netWave) * 0.03 * deltaMultiplier;
+        netWaveVelocity *= Math.pow(0.87, deltaMultiplier);
         netWave += netWaveVelocity * deltaMultiplier;
 
         particles.forEach((p) => {
@@ -385,41 +403,45 @@
     function drawNet(timestamp) {
         const rimLeft = getRimLeft();
         const rimRight = getRimRight();
+        const rimCenter = (rimLeft + rimRight) / 2;
         const rimY = hoop.y + 1;
-        const netDepth = 58;
-        const segments = 9;
+        const netDepth = 64;
+        const segments = 10;
+        const neckWidth = hoop.width * 0.46;
 
         for (let i = 0; i <= segments; i++) {
             const t = i / segments;
-            const x = rimLeft + t * (rimRight - rimLeft);
-            const sway = Math.sin(timestamp * 0.01 + i * 0.7) * netWave * (0.25 + t * 0.75);
-            const pinch = Math.sin(Math.PI * t) * 8;
+            const xTop = rimLeft + t * (rimRight - rimLeft);
+            const xBottom = rimCenter + (t - 0.5) * neckWidth;
+            const sway = Math.sin(timestamp * 0.011 + i * 0.75) * netWave * (0.35 + (1 - Math.abs(t - 0.5) * 1.4));
+            const controlTaper = (t - 0.5) * 22;
 
-            ctx.strokeStyle = 'rgba(241,245,249,0.55)';
-            ctx.lineWidth = 1.6;
+            ctx.strokeStyle = 'rgba(241,245,249,0.58)';
+            ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.moveTo(x, rimY);
+            ctx.moveTo(xTop, rimY);
             ctx.quadraticCurveTo(
-                x + sway + (t - 0.5) * pinch,
-                rimY + netDepth * 0.55,
-                x + sway * 0.45,
+                xTop + controlTaper + sway,
+                rimY + netDepth * 0.52,
+                xBottom + sway * 0.7,
                 rimY + netDepth
             );
             ctx.stroke();
         }
 
-        for (let row = 1; row <= 5; row++) {
-            const rowT = row / 5;
+        for (let row = 1; row <= 6; row++) {
+            const rowT = row / 6;
             const rowY = rimY + rowT * netDepth;
-            const left = rimLeft + rowT * 8;
-            const right = rimRight - rowT * 8;
-            const sway = Math.sin(timestamp * 0.012 + row * 0.9) * netWave * (0.8 - rowT * 0.45);
+            const rowWidth = hoop.width - (hoop.width - neckWidth) * rowT;
+            const left = rimCenter - rowWidth / 2;
+            const right = rimCenter + rowWidth / 2;
+            const sway = Math.sin(timestamp * 0.014 + row * 0.92) * netWave * (1 - rowT * 0.35);
 
-            ctx.strokeStyle = `rgba(248,250,252,${0.5 - rowT * 0.24})`;
+            ctx.strokeStyle = `rgba(248,250,252,${0.56 - rowT * 0.24})`;
             ctx.lineWidth = 1.1;
             ctx.beginPath();
             ctx.moveTo(left + sway, rowY);
-            ctx.lineTo(right + sway, rowY + 1.5);
+            ctx.quadraticCurveTo(rimCenter + sway * 1.2, rowY + 2, right + sway, rowY);
             ctx.stroke();
         }
     }
@@ -467,10 +489,13 @@
         ctx.lineWidth = 3;
         ctx.strokeRect(boardX - 62, boardY + 14, 70, 52);
 
-        ctx.shadowBlur = 20;
+        const rimGrad = ctx.createLinearGradient(getRimLeft(), hoop.y, getRimRight(), hoop.y);
+        rimGrad.addColorStop(0, '#f97316');
+        rimGrad.addColorStop(1, '#ef4444');
+        ctx.shadowBlur = 14;
         ctx.shadowColor = '#fb7185';
-        ctx.strokeStyle = '#ef4444';
-        ctx.lineWidth = 8;
+        ctx.strokeStyle = rimGrad;
+        ctx.lineWidth = 6;
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(getRimLeft(), hoop.y);
@@ -479,8 +504,8 @@
 
         ctx.fillStyle = '#dc2626';
         ctx.beginPath();
-        ctx.arc(getRimLeft(), hoop.y, hoop.rimRadius, 0, Math.PI * 2);
-        ctx.arc(getRimRight(), hoop.y, hoop.rimRadius, 0, Math.PI * 2);
+        ctx.arc(getRimLeft(), hoop.y, hoop.rimRadius * 0.9, 0, Math.PI * 2);
+        ctx.arc(getRimRight(), hoop.y, hoop.rimRadius * 0.9, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
 
