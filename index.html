@@ -120,7 +120,6 @@
     const scoreDisplay = document.getElementById('score-display');
     const streakDisplay = document.getElementById('streak-display');
 
-    // Oyun Değişkenleri
     let score = 0;
     let timeLeft = 60;
     let gameActive = false;
@@ -130,55 +129,68 @@
     let gameStartTimestamp = 0;
     let lastFrameTimestamp = 0;
     let animationFrameId = null;
+    let netWave = 0;
+    let netWaveVelocity = 0;
+
     const GAME_DURATION = 60;
     const FRAME_TIME_NORMALIZER = 16.67;
-    
-    // Eksik olan mouse değişkeni tanımlandı
+
     let mouse = { x: 0, y: 0 };
 
-    // Fizik Parametreleri
-    const gravity = 0.28; 
-    const friction = 0.99; 
-    const powerMultiplier = 0.25; 
-    
+    const gravity = 0.28;
+    const friction = 0.992;
+    const powerMultiplier = 0.24;
+    const bounceDamping = 0.74;
+
     let ball = {
-        x: 0, y: 0, radius: 25, 
-        vx: 0, vy: 0, 
-        isFlying: false, 
+        x: 0, y: 0, radius: 25,
+        vx: 0, vy: 0,
+        isFlying: false,
         isGrabbed: false,
-        startX: 0, startY: 0
+        startX: 0, startY: 0,
+        prevX: 0, prevY: 0,
+        scoredThisShot: false
     };
 
     const hoop = {
-        x: 0, y: 0, width: 90, height: 10,
-        rimRadius: 6
+        x: 0, y: 0, width: 96, rimRadius: 9,
+        boardOffsetX: 10,
+        boardWidth: 10,
+        boardHeight: 108,
+        boardTopOffset: -88
     };
+
+    function getRimLeft() { return hoop.x - hoop.width / 2; }
+    function getRimRight() { return hoop.x + hoop.width / 2; }
+    function getBoardX() { return getRimRight() + hoop.boardOffsetX; }
+    function getBoardY() { return hoop.y + hoop.boardTopOffset; }
 
     function resize() {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
+        hoop.x = canvas.width - 190;
+        hoop.y = canvas.height * 0.36;
         resetBall();
-        hoop.x = canvas.width - 160;
-        hoop.y = canvas.height * 0.35;
+        draw(performance.now());
     }
 
     function resetBall() {
-        ball.x = canvas.width * 0.2;
-        ball.y = canvas.height - 120;
+        ball.x = canvas.width * 0.32;
+        ball.y = canvas.height - 130;
         ball.vx = 0;
         ball.vy = 0;
+        ball.prevX = ball.x;
+        ball.prevY = ball.y;
         ball.isFlying = false;
         ball.isGrabbed = false;
+        ball.scoredThisShot = false;
     }
 
     function getMousePos(e) {
         const rect = canvas.getBoundingClientRect();
         const clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
         const clientY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
-        return {
-            x: clientX - rect.left,
-            y: clientY - rect.top
-        };
+        return { x: clientX - rect.left, y: clientY - rect.top };
     }
 
     const handleStart = (e) => {
@@ -200,35 +212,101 @@
         }
     };
 
-    const handleEnd = (e) => {
+    const handleEnd = () => {
         if (ball.isGrabbed) {
             ball.isGrabbed = false;
-            ball.startX = ball.x; 
+            ball.startX = ball.x;
+            ball.startY = ball.y;
             const dx = ball.x - mouse.x;
             const dy = ball.y - mouse.y;
-            
+
             ball.vx = dx * powerMultiplier;
             ball.vy = dy * powerMultiplier;
             ball.isFlying = true;
+            ball.scoredThisShot = false;
         }
     };
 
     canvas.addEventListener('mousedown', handleStart);
     canvas.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleEnd);
-    canvas.addEventListener('touchstart', handleStart, {passive: false});
-    canvas.addEventListener('touchmove', handleMove, {passive: false});
+    canvas.addEventListener('touchstart', handleStart, { passive: false });
+    canvas.addEventListener('touchmove', handleMove, { passive: false });
     window.addEventListener('touchend', handleEnd);
 
-    function createParticles(x, y, color) {
-        for (let i = 0; i < 20; i++) {
+    function createParticles(x, y, color, amount = 20) {
+        for (let i = 0; i < amount; i++) {
             particles.push({
                 x, y,
                 vx: (Math.random() - 0.5) * 12,
                 vy: (Math.random() - 0.5) * 12,
-                life: 1.0,
-                color: color
+                life: 1,
+                color
             });
+        }
+    }
+
+    function collideWithPoint(px, py) {
+        const dx = ball.x - px;
+        const dy = ball.y - py;
+        const dist = Math.hypot(dx, dy);
+        const minDist = ball.radius + hoop.rimRadius;
+        if (dist < minDist && dist > 0) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = minDist - dist;
+            ball.x += nx * overlap;
+            ball.y += ny * overlap;
+
+            const normalVel = ball.vx * nx + ball.vy * ny;
+            if (normalVel < 0) {
+                ball.vx -= (1 + bounceDamping) * normalVel * nx;
+                ball.vy -= (1 + bounceDamping) * normalVel * ny;
+                ball.vx *= 0.98;
+                ball.vy *= 0.98;
+            }
+        }
+    }
+
+    function handleHoopCollisions() {
+        const rimLeft = getRimLeft();
+        const rimRight = getRimRight();
+        const rimY = hoop.y;
+
+        collideWithPoint(rimLeft, rimY);
+        collideWithPoint(rimRight, rimY);
+
+        const boardX = getBoardX();
+        const boardY = getBoardY();
+        const boardBottom = boardY + hoop.boardHeight;
+
+        if (ball.x + ball.radius > boardX &&
+            ball.x - ball.radius < boardX + hoop.boardWidth &&
+            ball.y + ball.radius > boardY &&
+            ball.y - ball.radius < boardBottom) {
+
+            if (ball.prevX + ball.radius <= boardX) {
+                ball.x = boardX - ball.radius;
+                ball.vx = -Math.abs(ball.vx) * 0.78;
+            } else if (ball.prevY <= boardY && ball.vy > 0) {
+                ball.y = boardY - ball.radius;
+                ball.vy *= -0.66;
+            } else {
+                ball.x = boardX + hoop.boardWidth + ball.radius;
+                ball.vx = Math.abs(ball.vx) * 0.6;
+            }
+        }
+
+        if (
+            !ball.scoredThisShot &&
+            ball.prevY < rimY - ball.radius * 0.45 &&
+            ball.y >= rimY + ball.radius * 0.15 &&
+            ball.x > rimLeft + ball.radius * 0.45 &&
+            ball.x < rimRight - ball.radius * 0.45
+        ) {
+            ball.scoredThisShot = true;
+            netWaveVelocity += Math.min(7, Math.abs(ball.vy) * 0.25 + 1.2);
+            scoreBasket();
         }
     }
 
@@ -236,6 +314,9 @@
         if (!gameActive) return;
 
         if (ball.isFlying) {
+            ball.prevX = ball.x;
+            ball.prevY = ball.y;
+
             ball.vy += gravity * deltaMultiplier;
             ball.vx *= Math.pow(friction, deltaMultiplier);
             ball.x += ball.vx * deltaMultiplier;
@@ -243,48 +324,52 @@
 
             if (ball.x + ball.radius > canvas.width) {
                 ball.x = canvas.width - ball.radius;
-                ball.vx *= -0.6;
+                ball.vx *= -0.65;
             } else if (ball.x - ball.radius < 0) {
                 ball.x = ball.radius;
-                ball.vx *= -0.6;
+                ball.vx *= -0.65;
             }
 
-            if (ball.vy > 0 && 
-                ball.y > hoop.y - 15 && ball.y < hoop.y + 15 &&
-                ball.x > hoop.x - hoop.width/2 && ball.x < hoop.x + hoop.width/2) {
-                
-                scoreBasket();
-                resetBall();
-            }
+            handleHoopCollisions();
 
-            if (ball.y - ball.radius > canvas.height || ball.x > canvas.width + 100) {
+            if (ball.y - ball.radius > canvas.height || ball.x > canvas.width + 120 || ball.x < -120) {
                 streak = 0;
                 isPowerShot = false;
                 streakDisplay.innerText = streak;
+                streakDisplay.classList.remove('power-up-active');
+                resetBall();
+            }
+
+            if (ball.scoredThisShot && ball.y > hoop.y + 95) {
                 resetBall();
             }
         }
 
+        netWaveVelocity += (0 - netWave) * 0.02 * deltaMultiplier;
+        netWaveVelocity *= Math.pow(0.9, deltaMultiplier);
+        netWave += netWaveVelocity * deltaMultiplier;
+
         particles.forEach((p) => {
-            p.x += p.vx;
-            p.y += p.vy;
-            p.life -= 0.025 * deltaMultiplier;
+            p.x += p.vx * deltaMultiplier;
+            p.y += p.vy * deltaMultiplier;
+            p.vy += 0.08 * deltaMultiplier;
+            p.life -= 0.02 * deltaMultiplier;
         });
         particles = particles.filter(p => p.life > 0);
     }
 
     function scoreBasket() {
         let points = 2;
-        if (ball.startX < canvas.width * 0.35) points = 3;
+        if (ball.startX < canvas.width * 0.4) points = 3;
 
         if (isPowerShot) {
             points = 10;
-            createParticles(hoop.x, hoop.y, '#ff4500');
+            createParticles(hoop.x, hoop.y + 10, '#ff4500', 34);
             isPowerShot = false;
             streak = 0;
         } else {
             streak++;
-            createParticles(hoop.x, hoop.y, '#fbbf24');
+            createParticles(hoop.x, hoop.y + 10, '#fbbf24', 24);
         }
 
         if (streak >= 3) isPowerShot = true;
@@ -292,9 +377,51 @@
         score += points;
         scoreDisplay.innerText = score;
         streakDisplay.innerText = streak;
-        
+
         if (isPowerShot) streakDisplay.classList.add('power-up-active');
         else streakDisplay.classList.remove('power-up-active');
+    }
+
+    function drawNet(timestamp) {
+        const rimLeft = getRimLeft();
+        const rimRight = getRimRight();
+        const rimY = hoop.y + 1;
+        const netDepth = 58;
+        const segments = 9;
+
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const x = rimLeft + t * (rimRight - rimLeft);
+            const sway = Math.sin(timestamp * 0.01 + i * 0.7) * netWave * (0.25 + t * 0.75);
+            const pinch = Math.sin(Math.PI * t) * 8;
+
+            ctx.strokeStyle = 'rgba(241,245,249,0.55)';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.moveTo(x, rimY);
+            ctx.quadraticCurveTo(
+                x + sway + (t - 0.5) * pinch,
+                rimY + netDepth * 0.55,
+                x + sway * 0.45,
+                rimY + netDepth
+            );
+            ctx.stroke();
+        }
+
+        for (let row = 1; row <= 5; row++) {
+            const rowT = row / 5;
+            const rowY = rimY + rowT * netDepth;
+            const left = rimLeft + rowT * 8;
+            const right = rimRight - rowT * 8;
+            const sway = Math.sin(timestamp * 0.012 + row * 0.9) * netWave * (0.8 - rowT * 0.45);
+
+            ctx.strokeStyle = `rgba(248,250,252,${0.5 - rowT * 0.24})`;
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+            ctx.moveTo(left + sway, rowY);
+            ctx.lineTo(right + sway, rowY + 1.5);
+            ctx.stroke();
+        }
     }
 
     function draw(timestamp = 0) {
@@ -326,58 +453,58 @@
         ctx.strokeStyle = 'rgba(255,255,255,0.12)';
         ctx.lineWidth = 5;
         ctx.beginPath();
-        ctx.arc(0, canvas.height, canvas.width * 0.35, 0, -Math.PI/2, true);
+        ctx.arc(0, canvas.height, canvas.width * 0.35, 0, -Math.PI / 2, true);
         ctx.stroke();
 
-        const boardX = hoop.x + hoop.width/2 + 5;
-        const boardY = hoop.y - 80;
+        const boardX = getBoardX();
+        const boardY = getBoardY();
+
         ctx.fillStyle = 'rgba(241,245,249,0.85)';
-        ctx.fillRect(boardX, boardY, 10, 100);
+        ctx.fillRect(boardX, boardY, hoop.boardWidth, hoop.boardHeight);
         ctx.fillStyle = 'rgba(148,163,184,0.2)';
-        ctx.fillRect(boardX - 62, boardY + 10, 70, 50);
+        ctx.fillRect(boardX - 62, boardY + 14, 70, 52);
         ctx.strokeStyle = 'rgba(226,232,240,0.5)';
         ctx.lineWidth = 3;
-        ctx.strokeRect(boardX - 62, boardY + 10, 70, 50);
-        
+        ctx.strokeRect(boardX - 62, boardY + 14, 70, 52);
+
         ctx.shadowBlur = 20;
         ctx.shadowColor = '#fb7185';
         ctx.strokeStyle = '#ef4444';
         ctx.lineWidth = 8;
         ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.moveTo(hoop.x - hoop.width/2, hoop.y);
-        ctx.lineTo(hoop.x + hoop.width/2, hoop.y);
+        ctx.moveTo(getRimLeft(), hoop.y);
+        ctx.lineTo(getRimRight(), hoop.y);
         ctx.stroke();
+
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.arc(getRimLeft(), hoop.y, hoop.rimRadius, 0, Math.PI * 2);
+        ctx.arc(getRimRight(), hoop.y, hoop.rimRadius, 0, Math.PI * 2);
+        ctx.fill();
         ctx.shadowBlur = 0;
 
-        ctx.strokeStyle = 'rgba(226,232,240,0.55)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for(let i=-3; i<=3; i++) {
-            ctx.moveTo(hoop.x + i*12, hoop.y);
-            ctx.lineTo(hoop.x + i*7, hoop.y + 45);
-        }
-        ctx.stroke();
+        drawNet(timestamp);
 
         particles.forEach(p => {
             ctx.globalAlpha = p.life;
             ctx.fillStyle = p.color;
             ctx.beginPath();
-            ctx.arc(p.x, p.y, 4, 0, Math.PI*2);
+            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
             ctx.fill();
         });
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = 1;
 
         ctx.save();
         ctx.translate(ball.x, ball.y);
-        
+
         if (isPowerShot) {
             ctx.shadowBlur = 30;
             ctx.shadowColor = '#f56565';
-            for(let i=0; i<3; i++){
+            for (let i = 0; i < 3; i++) {
                 ctx.fillStyle = '#f6ad55';
                 ctx.beginPath();
-                ctx.arc((Math.random()-0.5)*30, (Math.random()-0.5)*30, 12, 0, Math.PI*2);
+                ctx.arc((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, 12, 0, Math.PI * 2);
                 ctx.fill();
             }
         }
@@ -387,7 +514,7 @@
         grad.addColorStop(1, '#c05621');
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(0, 0, ball.radius, 0, Math.PI*2);
+        ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.strokeStyle = 'rgba(120,53,15,0.8)';
@@ -403,7 +530,7 @@
         ctx.strokeStyle = 'rgba(0,0,0,0.4)';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(0, 0, ball.radius, 0, Math.PI*2);
+        ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
 
@@ -452,8 +579,10 @@
         isPowerShot = false;
         gameActive = true;
         particles = [];
-        scoreDisplay.innerText = "0";
-        streakDisplay.innerText = "0";
+        netWave = 0;
+        netWaveVelocity = 0;
+        scoreDisplay.innerText = '0';
+        streakDisplay.innerText = '0';
         timerDisplay.innerText = GAME_DURATION;
         streakDisplay.classList.remove('power-up-active');
         overlay.style.display = 'none';
@@ -481,10 +610,9 @@
 
     startBtn.addEventListener('click', startGame);
     window.addEventListener('resize', resize);
-    
+
     resize();
     draw(performance.now());
-
 </script>
 </body>
 </html>
