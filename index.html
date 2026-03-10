@@ -150,7 +150,9 @@
         isGrabbed: false,
         startX: 0, startY: 0,
         prevX: 0, prevY: 0,
-        scoredThisShot: false
+        scoredThisShot: false,
+        floorContactFrames: 0,
+        shotAge: 0
     };
 
     const hoop = {
@@ -185,6 +187,8 @@
         ball.isFlying = false;
         ball.isGrabbed = false;
         ball.scoredThisShot = false;
+        ball.floorContactFrames = 0;
+        ball.shotAge = 0;
     }
 
     function getMousePos(e) {
@@ -225,6 +229,8 @@
             ball.vy = dy * powerMultiplier;
             ball.isFlying = true;
             ball.scoredThisShot = false;
+            ball.floorContactFrames = 0;
+            ball.shotAge = 0;
         }
     };
 
@@ -332,6 +338,7 @@
             ball.prevX = ball.x;
             ball.prevY = ball.y;
 
+            ball.shotAge += deltaMultiplier;
             ball.vy += gravity * deltaMultiplier;
             ball.vx *= Math.pow(friction, deltaMultiplier);
             ball.x += ball.vx * deltaMultiplier;
@@ -351,11 +358,15 @@
                 if (Math.abs(ball.vy) > 0.35) {
                     ball.vy *= -floorBounce;
                     ball.vx *= 0.93;
+                    ball.floorContactFrames = 0;
                 } else {
                     ball.vy = 0;
                     ball.vx *= 0.9;
+                    ball.floorContactFrames += 1;
                 }
                 induceNetWave(Math.abs(ball.vx) * 0.01);
+            } else {
+                ball.floorContactFrames = 0;
             }
 
             handleHoopCollisions();
@@ -369,6 +380,16 @@
             }
 
             if (ball.scoredThisShot && ball.y > hoop.y + 95) {
+                resetBall();
+            }
+
+            if (ball.floorContactFrames > 28 || ball.shotAge > 260) {
+                if (!ball.scoredThisShot) {
+                    streak = 0;
+                    isPowerShot = false;
+                    streakDisplay.innerText = streak;
+                    streakDisplay.classList.remove('power-up-active');
+                }
                 resetBall();
             }
         }
@@ -506,12 +527,6 @@
             ctx.stroke();
         }
 
-        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(0, canvas.height, canvas.width * 0.35, 0, -Math.PI / 2, true);
-        ctx.stroke();
-
         ctx.strokeStyle = 'rgba(255,255,255,0.28)';
         ctx.lineWidth = 2.5;
         ctx.beginPath();
@@ -589,6 +604,19 @@
         ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
+
+        if (ball.isGrabbed) {
+            ctx.setLineDash([8, 4]);
+            ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(ball.x, ball.y);
+            const targetX = ball.x + (ball.x - mouse.x) * 2;
+            const targetY = ball.y + (ball.y - mouse.y) * 2;
+            ctx.lineTo(targetX, targetY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
 
     }
 
